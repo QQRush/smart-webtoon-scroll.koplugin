@@ -1,5 +1,5 @@
 return {
     name = "Smart Webtoon Scroll",
-    fullname = "Smart Webtoon Scroll 0.2.7.7D5 - Stabilized Fit Debug",
-    description = "Continuous webtoon scrolling based on 0.2.7, with lightweight cached skipping when a forward destination lands inside a white/black separator.",
+    fullname = "Smart Webtoon Scroll 0.2.7.10 - Auto Fit Sides + Render Preload",
+    description = "Continuous webtoon scrolling for CBZ/CBR with white/black separator snapping, Fit-to-Height, automatic side background, cross-file continuity and render preload.",
 }
