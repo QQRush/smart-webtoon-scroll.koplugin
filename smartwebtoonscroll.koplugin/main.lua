@@ -1,4 +1,4 @@
--- Smart Webtoon Scroll 0.2.7.10 - Auto Fit Sides + Render Preload
+-- Smart Webtoon Scroll 0.2.7.11 - Configurable Render Preload
 -- Based on the integration/rendering ideas of Webtoon Helper 2.2.4.
 -- Instead of detecting panels, every CBZ/CBR page is treated as part of one
 -- continuous vertical strip. A page turn moves roughly one screen, then looks
@@ -47,6 +47,7 @@ local SmartScroll = WidgetContainer:extend{
     render_cache = {},
     render_cache_order = {},
     preload_pending = false,
+    preload_pages = 2,
     layout = nil,
     current_y = nil,
     overlay = nil,
@@ -77,12 +78,13 @@ function SmartScroll:readSettings()
     self.overlap_ratio = n("overlap_ratio",0.035)
     self.fit_to_height = self.settings:readSetting("fit_to_height") ~= false
     self.fit_min_scale = n("fit_min_scale",0.88)
+    self.preload_pages = math.max(0, math.min(10, math.floor(n("preload_pages",2))))
 end
 
 function SmartScroll:saveSettings()
     for _,k in ipairs{
         "is_enabled","white_threshold","white_ratio","black_threshold","black_ratio",
-        "min_gap_px","adaptive_gap_ratio","search_range","overlap_ratio","fit_to_height","fit_min_scale"
+        "min_gap_px","adaptive_gap_ratio","search_range","overlap_ratio","fit_to_height","fit_min_scale","preload_pages"
     } do self.settings:saveSetting(k,self[k]) end
     self.settings:flush()
 end
@@ -377,6 +379,7 @@ function SmartScroll:setY(y)
     self:syncUnderlyingPage()
     self:updateFitToHeight()
     UIManager:setDirty(self.ui.view.dialog,"full")
+    self:schedulePreload()
 end
 
 function SmartScroll:nextScreen()
@@ -444,10 +447,8 @@ function SmartScroll:onSmartWebtoonToggle()
     return true
 end
 
--- Small render cache used by the preloader. Keep it deliberately tiny because
--- webtoon source images can be very tall and therefore expensive in RAM.
 function SmartScroll:renderCacheKey(page, scale)
-    return tostring(page) .. ":" .. string.format("%.5f", scale)
+    return tostring(page) .. "@" .. string.format("%.5f", scale)
 end
 
 function SmartScroll:getRenderedPage(page, scale)
@@ -460,16 +461,14 @@ function SmartScroll:getRenderedPage(page, scale)
     if not ok or not tile or not tile.bb then return nil end
     self.render_cache[key]=tile
     self.render_cache_order[#self.render_cache_order+1]=key
-    while #self.render_cache_order > 2 do
+    local max_cache=math.max(2,self.preload_pages+1)
+    while #self.render_cache_order > max_cache do
         local old=table.remove(self.render_cache_order,1)
         if old ~= key then self.render_cache[old]=nil end
     end
     return tile
 end
 
--- Determine whether the left/right padding created specifically by
--- Fit-to-Height should be black or white. Only a few edge pixels are sampled,
--- so this is negligible compared with decoding/rendering the page itself.
 function SmartScroll:fitSideColor(srcbb, sy, hh)
     if not srcbb or srcbb.w < 2 or srcbb.h < 1 then return Blitbuffer.COLOR_WHITE end
     local y0=math.max(0,sy)
@@ -489,22 +488,24 @@ function SmartScroll:fitSideColor(srcbb, sy, hh)
     return Blitbuffer.COLOR_WHITE
 end
 
--- Pre-render the next physical image after the current viewport. KOReader runs
--- this shortly after the current screen has painted, so a forward turn can
--- reuse the decoded/rendered buffer instead of paying that cost on demand.
 function SmartScroll:schedulePreload()
-    if self.preload_pending or not self.layout or not self.current_y then return end
+    if self.preload_pages <= 0 or self.preload_pending or not self.layout or not self.current_y then return end
     self.preload_pending=true
     UIManager:scheduleIn(0.08,function()
         self.preload_pending=false
         if not self.is_enabled or not self.layout or not self.current_y then return end
         local sh=Screen:getHeight()
         local probe=(self.fit_resume_y or self.fit_end or (self.current_y+sh)) + Screen:scaleBySize(2)
-        local candidate=nil
-        for _,pl in ipairs(self.layout.pages) do
-            if pl.y1 > probe then candidate=pl; break end
+        local first=nil
+        for i,pl in ipairs(self.layout.pages) do
+            if pl.y1 > probe then first=i; break end
         end
-        if candidate then self:getRenderedPage(candidate.page,candidate.scale) end
+        if not first then return end
+        local last=math.min(#self.layout.pages,first+self.preload_pages-1)
+        for i=first,last do
+            local pl=self.layout.pages[i]
+            self:getRenderedPage(pl.page,pl.scale)
+        end
     end)
 end
 
@@ -535,8 +536,6 @@ function SmartScroll:paintViewport(bb)
                 local ww=math.min(sw,tile.bb.w)
                 if hh>0 and ww>0 then
                     local dx=math.floor((sw-ww)/2)
-                    -- Only Fit-to-Height creates intentional lateral padding.
-                    -- Match that padding to the image edge: pure black or white.
                     if f < 0.999 and dx > 0 then
                         local side_color=self:fitSideColor(tile.bb,sy,hh)
                         bb:paintRect(0,dy,dx,hh,side_color)
@@ -549,7 +548,6 @@ function SmartScroll:paintViewport(bb)
         end
         if dy>=sh then break end
     end
-    self:schedulePreload()
 end
 
 function SmartScroll:resetAtPage(page)
@@ -563,6 +561,7 @@ function SmartScroll:resetAtPage(page)
     self.current_y=self:skipBlankAt(self.current_y)
     self:updateFitToHeight()
     UIManager:setDirty(self.ui.view.dialog,"full")
+    self:schedulePreload()
 end
 
 function SmartScroll:hookPageTurns()
@@ -625,6 +624,10 @@ function SmartScroll:showSettingsDialog(menu)
             description=_("Max Fit-to-Height reduction (%)\nIf content or an image is only slightly taller than the screen, shrink it by at most this percentage so it fits completely. 0 disables shrinking."),
             text=tostring(fit_reduction),input_type="number",hint=_("Recommended: 12"),
         },
+        {
+            description=_("Preload pages\nNumber of following CBZ images to render in advance. 0 disables preloading."),
+            text=tostring(self.preload_pages),input_type="number",hint=_("Recommended: 2"),
+        },
     },buttons={{{text=_("Cancel"),callback=function() UIManager:close(dlg) end},{text=_("Save"),callback=function()
         local f=dlg:getFields()
         self.search_range=math.max(.05,math.min(.45,(tonumber(f[1]) or 24)/100))
@@ -634,7 +637,8 @@ function SmartScroll:showSettingsDialog(menu)
         local reduction=math.max(0,math.min(80,tonumber(f[5]) or 12))
         self.fit_min_scale=1-(reduction/100)
         self.fit_to_height=reduction>0
-        self.page_cache={}; self:saveSettings(); self:updateFitToHeight(); UIManager:close(dlg)
+        self.preload_pages=math.max(0,math.min(10,math.floor(tonumber(f[6]) or 2)))
+        self.page_cache={}; self.render_cache={}; self:saveSettings(); self:updateFitToHeight(); self:schedulePreload(); UIManager:close(dlg)
         if menu then menu:updateItems() end
         UIManager:setDirty(self.ui.view.dialog,"full")
     end}}}}
@@ -654,7 +658,7 @@ function SmartScroll:addToMainMenu(menu_items)
 end
 
 function SmartScroll:onCloseDocument()
-    self:unhookPageTurns(); self.current_y=nil; self.page_cache={}; self.render_cache={}; self.render_cache_order={}; self.layout=nil
+    self:unhookPageTurns(); self.current_y=nil; self.page_cache={}; self.render_cache={}; self.layout=nil
     if self.ui and self.ui.view and self.ui.view.view_modules then self.ui.view.view_modules.smart_webtoon_scroll=nil end
 end
 
