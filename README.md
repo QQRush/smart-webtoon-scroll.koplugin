@@ -54,7 +54,7 @@ Example directory structure:
 ```text
 koreader/
 └── plugins/
-    └── smartwebtoonscroll-026.koplugin/
+    └── smartwebtoonscroll.koplugin/
         ├── _meta.lua
         └── main.lua
 ```
