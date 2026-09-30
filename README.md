@@ -8,6 +8,12 @@ A lightweight KOReader plugin designed for **vertical webtoons stored as CBZ/CBR
 
 Smart Webtoon Scroll turns the images inside a comic archive into a **continuous vertical strip** and makes page turns behave more naturally: fewer cut panels, less empty space, smoother chapter transitions, and adaptive rendering for different screen shapes.
 
+## 🎬 See it in action
+
+▶️ **[Watch Smart Webtoon Scroll in action on YouTube Shorts](https://www.youtube.com/shorts/S9LCgv_EFD0)**
+
+See how Smart Webtoon Scroll keeps panels and dialogue together while navigating a vertical webtoon in KOReader.
+
 ## Current version
 
 **0.2.7.24 — Adaptive Full-Screen Background**
