@@ -1,4 +1,4 @@
--- Smart Webtoon Scroll 0.2.7.11 - Configurable Render Preload
+-- Smart Webtoon Scroll 0.2.7.21 - Previous Chapter Last Smart Screen + Direct EOF + Symmetric Sidebar
 -- Based on the integration/rendering ideas of Webtoon Helper 2.2.4.
 -- Instead of detecting panels, every CBZ/CBR page is treated as part of one
 -- continuous vertical strip. A page turn moves roughly one screen, then looks
@@ -8,6 +8,7 @@ local Blitbuffer = require("ffi/blitbuffer")
 local DataStorage = require("datastorage")
 local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
+local Event = require("ui/event")
 local LuaSettings = require("luasettings")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local Screen = require("device").screen
@@ -62,6 +63,10 @@ local SmartScroll = WidgetContainer:extend{
     fit_scale = 1.0,
     fit_at_page_end = false,
     fit_resume_y = nil,
+
+    -- Optional right sidebar: narrows the webtoon render area on wide displays.
+    sidebar_enabled = false,
+    sidebar_ratio = 0.10,
 }
 
 function SmartScroll:readSettings()
@@ -79,12 +84,15 @@ function SmartScroll:readSettings()
     self.fit_to_height = self.settings:readSetting("fit_to_height") ~= false
     self.fit_min_scale = n("fit_min_scale",0.88)
     self.preload_pages = math.max(0, math.min(10, math.floor(n("preload_pages",2))))
+    self.sidebar_enabled = self.settings:readSetting("sidebar_enabled") == true
+    self.sidebar_ratio = math.max(0.01, math.min(0.20, n("sidebar_ratio",0.10)))
 end
 
 function SmartScroll:saveSettings()
     for _,k in ipairs{
         "is_enabled","white_threshold","white_ratio","black_threshold","black_ratio",
-        "min_gap_px","adaptive_gap_ratio","search_range","overlap_ratio","fit_to_height","fit_min_scale","preload_pages"
+        "min_gap_px","adaptive_gap_ratio","search_range","overlap_ratio","fit_to_height","fit_min_scale","preload_pages",
+        "sidebar_enabled","sidebar_ratio"
     } do self.settings:saveSetting(k,self[k]) end
     self.settings:flush()
 end
@@ -103,7 +111,8 @@ end
 -- Build the virtual strip in DISPLAY pixels. Every physical image is fit to
 -- screen width independently, so pages with different source widths still join.
 function SmartScroll:buildLayout()
-    local sw = Screen:getWidth()
+    local full_sw = Screen:getWidth()
+    local sw = self.sidebar_enabled and math.max(1, math.floor(full_sw * (1-self.sidebar_ratio) + 0.5)) or full_sw
     local pages, y = {}, 0
     for p=1,self:pageCount() do
         local d = self.ui.document:getNativePageDimensions(p)
@@ -114,7 +123,7 @@ function SmartScroll:buildLayout()
             y = y + dh
         end
     end
-    self.layout = {pages=pages, total_h=y, screen_w=sw}
+    self.layout = {pages=pages, total_h=y, screen_w=sw, full_screen_w=full_sw}
 end
 
 function SmartScroll:getPageLayout(page)
@@ -387,10 +396,14 @@ function SmartScroll:nextScreen()
     local sh=Screen:getHeight()
     local maxy=math.max(0,self.layout.total_h-sh)
 
-    -- At the real end of the virtual strip, do not consume the page-turn.
-    -- Returning false lets the hook hand the event back to KOReader, which can
-    -- perform its native end-of-document action (including opening next CBZ).
+    -- At the real end of the virtual strip, emit KOReader's EndOfBook
+    -- event directly. ReaderPaging normally emits this only after a native
+    -- page turn fails to move; doing it here avoids consuming an extra tap.
     if self.current_y >= maxy-1 and not (self.fit_end and self.fit_end > self.current_y) then
+        if self.ui then
+            self.ui:handleEvent(Event:new("EndOfBook"))
+            return true
+        end
         return false
     end
 
@@ -430,8 +443,32 @@ function SmartScroll:nextScreen()
     return true
 end
 
+function SmartScroll:openPreviousAtEnd()
+    if not self.ui or not self.ui.document then return false end
+    local FileChooser = require("ui/widget/filechooser")
+    local fc = FileChooser:new{ ui = self.ui }
+    local file = fc:getNextOrPreviousFileInFolder(self.ui.document.file, true)
+    if not file then
+        UIManager:show(InfoMessage:new{ text=_("This is the first file in the folder. No previous file to open.") })
+        return true
+    end
+
+    -- Remember the exact destination. The new Reader instance consumes this
+    -- one-shot marker and positions Smart Webtoon Scroll at its real EOF.
+    G_reader_settings:saveSetting("smart_webtoon_open_at_end", file)
+    G_reader_settings:flush()
+    local filemanagerutil = require("apps/filemanager/filemanagerutil")
+    UIManager:nextTick(function()
+        filemanagerutil.openFile(self.ui, file)
+    end)
+    return true
+end
+
 function SmartScroll:prevScreen()
-    if not self.current_y or self.current_y <= 0 then self:setY(0); return true end
+    if not self.current_y or self.current_y <= 0 then
+        self:setY(0)
+        return self:openPreviousAtEnd()
+    end
     local sh=Screen:getHeight()
     local target=self.current_y-sh
     local snap=self:findBestSnap(target,-1)
@@ -511,8 +548,11 @@ end
 
 function SmartScroll:paintViewport(bb)
     if not self.layout then self:buildLayout() end
-    local sw,sh=Screen:getWidth(),Screen:getHeight()
-    bb:paintRect(0,0,sw,sh,Blitbuffer.COLOR_WHITE)
+    local full_sw,sh=Screen:getWidth(),Screen:getHeight()
+    local sw=(self.layout and self.layout.screen_w) or full_sw
+    -- Sidebar ratio is TOTAL reserved width, split equally left/right.
+    local content_x=math.floor((full_sw-sw)/2)
+    bb:paintRect(0,0,full_sw,sh,Blitbuffer.COLOR_WHITE)
 
     local f=(self.fit_end and self.fit_scale) or 1.0
     local top=self.current_y
@@ -535,11 +575,12 @@ function SmartScroll:paintViewport(bb)
                 hh=math.min(hh,tile.bb.h-sy,sh-dy)
                 local ww=math.min(sw,tile.bb.w)
                 if hh>0 and ww>0 then
-                    local dx=math.floor((sw-ww)/2)
-                    if f < 0.999 and dx > 0 then
+                    local inner_dx=math.floor((sw-ww)/2)
+                    local dx=content_x+inner_dx
+                    if f < 0.999 and inner_dx > 0 then
                         local side_color=self:fitSideColor(tile.bb,sy,hh)
-                        bb:paintRect(0,dy,dx,hh,side_color)
-                        bb:paintRect(dx+ww,dy,sw-(dx+ww),hh,side_color)
+                        bb:paintRect(content_x,dy,inner_dx,hh,side_color)
+                        bb:paintRect(dx+ww,dy,sw-(inner_dx+ww),hh,side_color)
                     end
                     bb:blitFrom(tile.bb,dx,dy,0,sy,ww,hh)
                     dy=dy+hh
@@ -589,7 +630,22 @@ function SmartScroll:onReaderReady()
     self.overlay=StripOverlay:new{plugin=self}
     self.ui.view:registerViewModule("smart_webtoon_scroll",self.overlay)
     self:hookPageTurns()
-    if self.is_enabled then self:resetAtPage(self.ui.paging.current_page or 1) end
+    if self.is_enabled then
+        local open_at_end = G_reader_settings:readSetting("smart_webtoon_open_at_end")
+        if open_at_end and open_at_end == self.ui.document.file then
+            -- One-shot: clear before positioning, so a crash/reopen cannot
+            -- unexpectedly force this document back to its end.
+            G_reader_settings:delSetting("smart_webtoon_open_at_end")
+            G_reader_settings:flush()
+            self.page_cache={}
+            self.render_cache={}
+            self.render_cache_order={}
+            local maxy=math.max(0,self.layout.total_h-Screen:getHeight())
+            self:setY(maxy)
+        else
+            self:resetAtPage(self.ui.paging.current_page or 1)
+        end
+    end
 end
 
 function SmartScroll:onPageUpdate(page)
@@ -628,6 +684,10 @@ function SmartScroll:showSettingsDialog(menu)
             description=_("Preload pages\nNumber of following CBZ images to render in advance. 0 disables preloading."),
             text=tostring(self.preload_pages),input_type="number",hint=_("Recommended: 2"),
         },
+        {
+            description=_("Sidebar width (%)\nTotal blank sidebar width, split equally between left and right. Range: 1-20%."),
+            text=tostring(math.floor(self.sidebar_ratio*100+0.5)),input_type="number",hint=_("Recommended: 10"),
+        },
     },buttons={{{text=_("Cancel"),callback=function() UIManager:close(dlg) end},{text=_("Save"),callback=function()
         local f=dlg:getFields()
         self.search_range=math.max(.05,math.min(.45,(tonumber(f[1]) or 24)/100))
@@ -638,7 +698,8 @@ function SmartScroll:showSettingsDialog(menu)
         self.fit_min_scale=1-(reduction/100)
         self.fit_to_height=reduction>0
         self.preload_pages=math.max(0,math.min(10,math.floor(tonumber(f[6]) or 2)))
-        self.page_cache={}; self.render_cache={}; self:saveSettings(); self:updateFitToHeight(); self:schedulePreload(); UIManager:close(dlg)
+        self.sidebar_ratio=math.max(0.01,math.min(0.20,(tonumber(f[7]) or 10)/100))
+        self.page_cache={}; self.render_cache={}; self:saveSettings(); self:buildLayout(); self:resetAtPage(self.ui.paging.current_page or 1); UIManager:close(dlg)
         if menu then menu:updateItems() end
         UIManager:setDirty(self.ui.view.dialog,"full")
     end}}}}
@@ -649,6 +710,7 @@ function SmartScroll:addToMainMenu(menu_items)
     menu_items.SmartWebtoonScroll={text=_("Smart Webtoon Scroll"),sorting_hint="typeset",sub_item_table={
         {text=_("Enable continuous strip"),checked_func=function() return self.is_enabled end,callback=function() self:onSmartWebtoonToggle() end},
         {text=_("Fit slightly oversized content to height"),checked_func=function() return self.fit_to_height end,callback=function() self.fit_to_height=not self.fit_to_height; self:saveSettings(); self:updateFitToHeight(); UIManager:setDirty(self.ui.view.dialog,"full") end},
+        {text=_("Sidebar"),checked_func=function() return self.sidebar_enabled end,callback=function() self.sidebar_enabled=not self.sidebar_enabled; self:saveSettings(); self:resetAtPage(self.ui.paging.current_page or 1) end},
         {text=_("Next smart screen"),callback=function() self:nextScreen() end},
         {text=_("Previous smart screen"),callback=function() self:prevScreen() end},
         {text=_("Scroll settings"),callback=function(m) self:showSettingsDialog(m) end},
