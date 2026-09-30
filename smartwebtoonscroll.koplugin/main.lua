@@ -1,4 +1,4 @@
--- Smart Webtoon Scroll 0.2.7.21 - Previous Chapter Last Smart Screen + Direct EOF + Symmetric Sidebar
+-- Smart Webtoon Scroll 0.2.7.23 - Previous Chapter Last Smart Screen + Direct EOF + Symmetric Sidebar
 -- Based on the integration/rendering ideas of Webtoon Helper 2.2.4.
 -- Instead of detecting panels, every CBZ/CBR page is treated as part of one
 -- continuous vertical strip. A page turn moves roughly one screen, then looks
@@ -11,6 +11,8 @@ local InfoMessage = require("ui/widget/infomessage")
 local Event = require("ui/event")
 local LuaSettings = require("luasettings")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
+local Geom = require("ui/geometry")
+local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -546,17 +548,53 @@ function SmartScroll:schedulePreload()
     end)
 end
 
+function SmartScroll:viewportBackgroundColor(top, bottom, f)
+    -- Pick one adaptive background for the WHOLE visible viewport.
+    -- Sample the left/right edges of every visible rendered slice and weight
+    -- naturally by the number of sampled rows. This reuses the render cache.
+    local sum,n=0,0
+    for _,pl in ipairs(self.layout.pages) do
+        if pl.y1 > top and pl.y0 < bottom then
+            local vis0=math.max(top,pl.y0)
+            local vis1=math.min(bottom,pl.y1)
+            local tile=self:getRenderedPage(pl.page,pl.scale*f)
+            if tile and tile.bb and tile.bb.w >= 2 and tile.bb.h >= 1 then
+                local sy=math.max(0,math.floor((vis0-pl.y0)*f+0.5))
+                local hh=math.max(1,math.floor((vis1-vis0)*f+0.5))
+                local y0=math.max(0,sy)
+                local y1=math.min(tile.bb.h-1,sy+hh-1)
+                if y1 >= y0 then
+                    local step=math.max(1,math.floor((y1-y0+1)/24))
+                    local inset=math.min(2,math.max(0,math.floor(tile.bb.w/100)))
+                    local xs={inset,math.max(0,tile.bb.w-1-inset)}
+                    for yy=y0,y1,step do
+                        for _,xx in ipairs(xs) do
+                            local ok,px=pcall(function() return tile.bb:getPixel(xx,yy):getColor8().a end)
+                            if ok and px then sum=sum+px; n=n+1 end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if n>0 and (sum/n) < 128 then return Blitbuffer.COLOR_BLACK end
+    return Blitbuffer.COLOR_WHITE
+end
+
 function SmartScroll:paintViewport(bb)
     if not self.layout then self:buildLayout() end
     local full_sw,sh=Screen:getWidth(),Screen:getHeight()
     local sw=(self.layout and self.layout.screen_w) or full_sw
     -- Sidebar ratio is TOTAL reserved width, split equally left/right.
     local content_x=math.floor((full_sw-sw)/2)
-    bb:paintRect(0,0,full_sw,sh,Blitbuffer.COLOR_WHITE)
 
     local f=(self.fit_end and self.fit_scale) or 1.0
     local top=self.current_y
     local bottom=self.fit_end or (self.current_y+sh)
+    local viewport_color=self:viewportBackgroundColor(top,bottom,f)
+    -- Paint first, then draw the webtoon over it: sidebar, Fit margins and any
+    -- uncovered top/bottom area all inherit the same adaptive color.
+    bb:paintRect(0,0,full_sw,sh,viewport_color)
     local dy=0
 
     for _,pl in ipairs(self.layout.pages) do
@@ -577,11 +615,9 @@ function SmartScroll:paintViewport(bb)
                 if hh>0 and ww>0 then
                     local inner_dx=math.floor((sw-ww)/2)
                     local dx=content_x+inner_dx
-                    if f < 0.999 and inner_dx > 0 then
-                        local side_color=self:fitSideColor(tile.bb,sy,hh)
-                        bb:paintRect(content_x,dy,inner_dx,hh,side_color)
-                        bb:paintRect(dx+ww,dy,sw-(inner_dx+ww),hh,side_color)
-                    end
+                    -- The full viewport has already been painted with the
+                    -- adaptive edge color, so Fit/sidebar margins need no
+                    -- separate fills here.
                     bb:blitFrom(tile.bb,dx,dy,0,sy,ww,hh)
                     dy=dy+hh
                 end
@@ -661,31 +697,31 @@ function SmartScroll:showSettingsDialog(menu)
     local fit_reduction=math.floor((1-self.fit_min_scale)*1000+0.5)/10
     dlg=MultiInputDialog:new{title=_("Smart Webtoon Scroll"),fields={
         {
-            description=_("Flexible search range (%)\nHow far around the normal page boundary to look for a white/black separator."),
+            description=_("Search range (%)"),
             text=tostring(math.floor(self.search_range*100+0.5)),input_type="number",hint=_("Recommended: 24"),
         },
         {
-            description=_("Long-panel overlap (%)\nOverlap kept when content is too long to fit and must be split."),
+            description=_("Panel overlap (%)"),
             text=tostring(math.floor(self.overlap_ratio*1000+0.5)/10),input_type="number",hint=_("Recommended: 3.5"),
         },
         {
-            description=_("Minimum separator height (px)\nMinimum source-image height for a white/black band to count as a separator."),
+            description=_("Min separator (px)"),
             text=tostring(self.min_gap_px),input_type="number",hint=_("Recommended: 22"),
         },
         {
-            description=_("White threshold (0-255)\nHigher values require separator pixels to be closer to pure white."),
+            description=_("White threshold"),
             text=tostring(self.white_threshold),input_type="number",hint=_("Recommended: 245"),
         },
         {
-            description=_("Max Fit-to-Height reduction (%)\nIf content or an image is only slightly taller than the screen, shrink it by at most this percentage so it fits completely. 0 disables shrinking."),
+            description=_("Max Fit reduction (%)"),
             text=tostring(fit_reduction),input_type="number",hint=_("Recommended: 12"),
         },
         {
-            description=_("Preload pages\nNumber of following CBZ images to render in advance. 0 disables preloading."),
+            description=_("Preload pages"),
             text=tostring(self.preload_pages),input_type="number",hint=_("Recommended: 2"),
         },
         {
-            description=_("Sidebar width (%)\nTotal blank sidebar width, split equally between left and right. Range: 1-20%."),
+            description=_("Sidebar width (%)"),
             text=tostring(math.floor(self.sidebar_ratio*100+0.5)),input_type="number",hint=_("Recommended: 10"),
         },
     },buttons={{{text=_("Cancel"),callback=function() UIManager:close(dlg) end},{text=_("Save"),callback=function()
@@ -703,6 +739,21 @@ function SmartScroll:showSettingsDialog(menu)
         if menu then menu:updateItems() end
         UIManager:setDirty(self.ui.view.dialog,"full")
     end}}}}
+    -- MultiInputDialog itself does not crop/scroll overflowing fields. Wrap the
+    -- complete dialog in KOReader's native ScrollableContainer so every setting
+    -- remains reachable on short/wide screens. The container automatically
+    -- handles touch dragging and the scrollbar; input widgets keep their normal
+    -- focus/keyboard behaviour.
+    local available_h = math.floor(Screen:getHeight() * 0.92)
+    local available_w = math.min(Screen:getWidth(), dlg.dialog_frame:getSize().w)
+    if dlg.dialog_frame:getSize().h > available_h then
+        local scroller = ScrollableContainer:new{
+            dimen = Geom:new{ w = available_w, h = available_h },
+            dlg.dialog_frame,
+        }
+        dlg[1][1] = scroller
+        dlg.settings_scroller = scroller -- keep a strong reference for cleanup
+    end
     UIManager:show(dlg); dlg:onShowKeyboard()
 end
 
