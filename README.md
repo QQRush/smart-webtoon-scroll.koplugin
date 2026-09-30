@@ -1,55 +1,53 @@
 # Smart Webtoon Scroll for KOReader
 
 <p align="center">
-  <img src="5ED2FFBA-C5D2-4FD7-A97E-F9828F4AFD58.png" alt="Smart Webtoon Scroll — Before and After comparison" width="100%">
+  <img src="Immagine%20ChatGPT%2030%20set%202026,%2010_43_24.png" alt="Smart Webtoon Scroll v0.2.7.24 overview" width="100%">
 </p>
 
 A lightweight KOReader plugin designed for **vertical webtoons stored as CBZ/CBR files**.
 
-Instead of treating every image in the archive as a separate page, Smart Webtoon Scroll builds a **continuous vertical strip** and makes normal page turns behave more naturally for webtoon reading.
-
-## Before → After
-
-Without Smart Webtoon Scroll, a normal screen boundary can land in the middle of a scene, split dialogue between screens, or leave large separator areas visible. With the plugin enabled, navigation searches for a cleaner visual boundary so scenes and dialogue stay together whenever possible.
-
-The comparison above illustrates the goal: **less arbitrary cutting, less empty space, and a more natural webtoon reading flow on an e-reader.**
+Smart Webtoon Scroll turns the images inside a comic archive into a **continuous vertical strip** and makes page turns behave more naturally: fewer cut panels, less empty space, smoother chapter transitions, and adaptive rendering for different screen shapes.
 
 ## Current version
 
-**0.2.7.10 — Auto Fit Sides + Render Preload**
+**0.2.7.24 — Adaptive Full-Screen Background**
 
-This is the current tested/stable release.
+This is the current recommended stable build.
 
-## Features
+## Highlights
 
-- **Continuous vertical webtoon strip** — consecutive CBZ/CBR images are treated as one continuous document.
-- **Smart separator snapping** — detects horizontal white or black separator bands and tries to start the next screen immediately after them.
-- **Cross-file continuity** — content can continue naturally across physical image boundaries inside the archive.
-- **Fit-to-Height** — content that is only slightly taller than the display can be reduced just enough to fit on one screen instead of being unnecessarily split.
-- **Automatic side background** — when Fit-to-Height creates lateral margins, the plugin samples the image edges and automatically uses a black or white background to match the artwork.
-- **Render preload** — pre-renders the next physical image shortly after the current screen is painted, reducing the delay when moving forward through large webtoon images.
-- **Long-panel fallback** — content that cannot reasonably fit on one screen is split with a configurable overlap.
-- **Blank-area skipping** — when a destination lands inside a detected white/black separator, the viewport advances to the beginning of real content.
-- **Native end-of-document behavior** — at the end of the virtual strip, navigation is returned to KOReader so its normal next-document/next-CBZ behavior can take over.
-- **Low-resolution analysis cache** — separator detection is deliberately lightweight and does not attempt complex panel recognition.
+- **Continuous vertical strip** — consecutive CBZ/CBR images behave like one long webtoon.
+- **Smart separator snapping** — detects white and black horizontal separator bands and tries to place screen boundaries at cleaner visual positions.
+- **Fit-to-Height** — slightly oversized content can be reduced just enough to remain together on one screen.
+- **Full-screen adaptive background** — the visible content is sampled and the entire viewport is filled with a matching black or white background before the webtoon is rendered. This keeps Fit-to-Height and margins visually seamless.
+- **Symmetric Sidebar** — optional 1–20% side space for wider displays such as 3:2 screens. The space is divided equally between left and right so the webtoon stays centered.
+- **Configurable Render Preload** — choose how many upcoming pages are prepared in advance for smoother navigation.
+- **Cross-file continuity** — artwork can continue naturally across physical images inside the archive.
+- **Seamless chapter navigation** — moving forward from the last Smart Screen opens the next chapter; moving backward from the first Smart Screen opens the previous chapter.
+- **Previous chapter → last Smart Screen** — when going back a chapter, the plugin positions you at that chapter's final Smart Screen instead of starting from the top.
+- **Compact, scrollable settings** — shorter labels and a vertically scrollable settings window work better on small screens.
+- **Lightweight analysis** — separator detection uses cached low-resolution analysis instead of expensive panel recognition.
+
+## Before → After
+
+Without the plugin, a normal page boundary may cut through artwork or dialogue and leave large blank areas. Smart Webtoon Scroll searches around the natural page boundary for a cleaner separator and keeps the reading flow visually continuous whenever possible.
+
+The plugin intentionally **does not perform complex panel detection**. Its goal is to remain lightweight while making ordinary page-turn reading feel much better for vertical webtoons.
 
 ## How it works
 
-Smart Webtoon Scroll does **not** try to identify individual comic panels. Each image is fitted to screen width and placed into a virtual continuous vertical strip.
+Each physical image is fitted into a virtual vertical strip. When you move forward or backward, Smart Webtoon Scroll calculates the next viewport and looks nearby for a suitable white or black separator.
 
-When you move forward, the plugin calculates approximately one screen of movement and searches around that position for a suitable white or black horizontal separator. When one is found, the next viewport begins just after the separator. If there is no safe separator, the content is split normally with a small overlap.
+If content is only slightly taller than the display, **Fit-to-Height** can shrink that section within the configured limit. When margins are exposed, the **adaptive full-screen background** fills the whole viewport with black or white according to the visible artwork.
 
-For content that extends only slightly beyond the bottom of the screen, Fit-to-Height can shrink the current section within a configurable limit so that it remains intact.
+On wider screens, **Symmetric Sidebar** can intentionally reduce the reading width while keeping the content centered.
 
 ## Installation
 
-1. Download or clone this repository.
-2. Make sure the plugin directory ends in `.koplugin`.
-3. Copy the plugin folder into KOReader's `plugins` directory.
-4. Restart KOReader.
-5. Open a CBZ/CBR and enable **Smart Webtoon Scroll** from the KOReader menu.
-
-Example directory structure:
+1. Download the latest release.
+2. Extract/copy `smartwebtoonscroll.koplugin` into KOReader's `plugins` directory.
+3. Restart KOReader.
+4. Open a CBZ/CBR and enable **Smart Webtoon Scroll** from the KOReader menu.
 
 ```text
 koreader/
@@ -59,37 +57,48 @@ koreader/
         └── main.lua
 ```
 
-## Settings
-
-The plugin exposes these main controls from the KOReader menu:
+## Main controls
 
 - Enable continuous strip
 - Fit slightly oversized content to height
-- Next smart screen
-- Previous smart screen
+- Sidebar ON/OFF
+- Next Smart Screen
+- Previous Smart Screen
 - Scroll settings
 - Reset at current CBZ image
 
-Advanced scroll settings include:
+## Settings
 
-| Setting | Default | Purpose |
-| --- | ---: | --- |
-| Flexible search range | 24% | Area around the normal page boundary searched for a separator |
-| Long-panel overlap | 3.5% | Overlap retained when long content has to be split |
-| Minimum separator height | 22 px | Minimum source-image height of a white/black band |
-| White threshold | 245 | How close pixels must be to pure white for white-separator detection |
-| Max Fit-to-Height reduction | 12% | Maximum shrinking allowed to keep slightly oversized content together |
+The compact settings window includes controls for:
+
+| Setting | Purpose |
+| --- | --- |
+| Search range (%) | How far around the normal boundary the plugin searches for a separator |
+| Panel overlap (%) | Overlap retained when long content must be split |
+| Min separator (px) | Minimum size of a detected separator band |
+| White threshold | Sensitivity for white separator detection |
+| Max Fit reduction (%) | Maximum reduction allowed by Fit-to-Height |
+| Preload pages | Number of upcoming pages prepared in advance |
+| Sidebar width (%) | Total symmetric side space, adjustable from 1–20% |
+
+## What's new in v0.2.7.24
+
+- Full-viewport adaptive black/white background.
+- Symmetric configurable Sidebar for wider displays.
+- Configurable render preload.
+- Improved next/previous chapter navigation.
+- Returning to a previous chapter now opens its last Smart Screen.
+- Compact and scrollable settings interface.
+- Cleaner handling of chapter boundaries while keeping normal scrolling lightweight.
 
 ## Notes
 
-The plugin is intended primarily for **fixed-layout CBZ/CBR webtoons**. It is not a panel-detection engine and deliberately avoids expensive image segmentation.
-
-Because webtoon archives vary greatly in image dimensions, separator spacing, background color and artwork layout, some titles may benefit from adjusting the separator and overlap settings.
+Smart Webtoon Scroll is primarily intended for **fixed-layout vertical webtoons in CBZ/CBR archives**. Different webtoons use different image sizes, separator styles and artwork backgrounds, so some titles may benefit from small adjustments to the separator, overlap or Fit settings.
 
 ## Credits
 
-The plugin was developed from the Smart Webtoon Scroll experiments for KOReader and incorporates integration/rendering ideas inspired by **Webtoon Helper 2.2.4**.
+Smart Webtoon Scroll grew from experiments with continuous webtoon reading in KOReader and incorporates integration/rendering ideas inspired by **Webtoon Helper 2.2.4**.
 
 ## Status
 
-`0.2.7.10` is the current approved stable base. Future changes should be built from this version unless explicitly stated otherwise.
+`0.2.7.24` is the current recommended stable build.
